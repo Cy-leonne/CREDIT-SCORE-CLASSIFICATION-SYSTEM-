@@ -1,0 +1,359 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+from xgboost import XGBClassifier
+import warnings
+warnings.filterwarnings('ignore')
+
+# Step 1: Generate synthetic credit dataset
+np.random.seed(42)
+n_samples = 1000
+
+data = {
+    'age': np.random.normal(35, 10, n_samples).clip(18, 75).astype(int),
+    'income': np.random.lognormal(10, 0.5, n_samples).clip(10000, 200000).astype(int),
+    'debt_to_income': np.random.beta(2, 5, n_samples) * 0.8,
+    'credit_utilization': np.random.beta(3, 3, n_samples) * 1.0,
+    'years_credit': np.random.exponential(5, n_samples).clip(0, 40),
+    'num_credit_lines': np.random.poisson(3, n_samples).clip(0, 15),
+    'credit_history': np.random.choice(['good', 'fair', 'poor'], n_samples, p=[0.5, 0.3, 0.2]),
+    'employment_years': np.random.exponential(7, n_samples).clip(0, 50),
+    'loan_amount': np.random.lognormal(11, 0.4, n_samples).clip(5000, 100000).astype(int)
+}
+
+df = pd.DataFrame(data)
+
+# Define credit score based on features (simplified rule-based for synthetic)
+def calculate_credit_score(row):
+    score = 0
+    if row['age'] > 25: score += 10
+    if row['income'] > 50000: score += 20
+    if row['debt_to_income'] < 0.3: score += 25
+    if row['credit_utilization'] < 0.3: score += 25
+    if row['years_credit'] > 5: score += 15
+    if row['num_credit_lines'] < 5: score += 10
+    if row['credit_history'] == 'good': score += 30
+    elif row['credit_history'] == 'fair': score += 10
+    if row['employment_years'] > 2: score += 15
+    if row['loan_amount'] < 50000: score += 10
+    if score >= 120: return 'high'
+    elif score >= 80: return 'medium'
+    else: return 'low'
+
+df['credit_score'] = df.apply(calculate_credit_score, axis=1)
+
+print("Dataset generated. Shape:", df.shape)
+print("\nTarget distribution:")
+print(df['credit_score'].value_counts())
+
+# Step 2: EDA
+plt.figure(figsize=(15, 10))
+
+plt.subplot(2, 3, 1)
+df['credit_score'].value_counts().plot(kind='bar')
+plt.title('Credit Score Distribution')
+
+plt.subplot(2, 3, 2)
+sns.histplot(df['age'], kde=True)
+plt.title('Age Distribution')
+
+plt.subplot(2, 3, 3)
+sns.histplot(df['income']/1000, kde=True)
+plt.title('Income (thousands)')
+
+plt.subplot(2, 3, 4)
+sns.boxplot(x='credit_score', y='debt_to_income', data=df)
+plt.title('Debt to Income by Score')
+
+plt.subplot(2, 3, 5)
+sns.boxplot(x='credit_score', y='credit_utilization', data=df)
+plt.title('Credit Utilization by Score')
+
+plt.subplot(2, 3, 6)
+sns.countplot(x='credit_history', hue='credit_score', data=df)
+plt.title('Credit History vs Score')
+
+plt.tight_layout()
+plt.show()
+
+# Correlation heatmap (numeric features)
+numeric_df = df.select_dtypes(include=[np.number])
+plt.figure(figsize=(10, 8))
+sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', center=0)
+plt.title('Correlation Heatmap')
+plt.show()
+
+# Step 3: Preprocessing
+# Encode categorical
+le_history = LabelEncoder()
+df['credit_history_encoded'] = le_history.fit_transform(df['credit_history'])
+
+# Features and target
+X = df.drop(['credit_score', 'credit_history'], axis=1)
+y = df['credit_score']
+
+le_target = LabelEncoder()
+y_encoded = le_target.fit_transform(y)
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
+
+# Scale features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print("\nTrain set shape:", X_train_scaled.shape)
+print("Test set shape:", X_test_scaled.shape)
+
+# Step 4: Train models
+models = {
+    'Logistic Regression': LogisticRegression(random_state=42, max_iter=1000),
+    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+    'XGBoost': XGBClassifier(random_state=42, eval_metric='mlogloss')
+}
+
+results = {}
+for name, model in models.items():
+    # Train
+    model.fit(X_train_scaled, y_train)
+    
+    # Predict
+    y_pred = model.predict(X_test_scaled)
+    
+    # Evaluate
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, model.predict_proba(X_test_scaled), multi_class='ovr')
+results[name] = {'accuracy': acc, 'roc_auc': auc}
+    
+print(f"\n{name}:")
+print(f"Accuracy: {acc:.4f}")
+print(f"ROC-AUC: {auc:.4f}")
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=le_target.classes_))
+
+# Best model
+best_model_name = max(results, key=lambda k: results[k]['accuracy'])
+best_model = models[best_model_name]
+print(f"\nBest model: {best_model_name} (Accuracy: {results[best_model_name]['accuracy']:.4f})")
+
+# Confusion Matrix for best model
+y_pred_best = best_model.predict(X_test_scaled)
+cm = confusion_matrix(y_test, y_pred_best)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=le_target.classes_, yticklabels=le_target.classes_)
+plt.title(f'Confusion Matrix - {best_model_name}')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.show()
+
+# Step 5: Prediction function
+def predict_credit_score(model, scaler, le_target, le_history, input_data):
+    """
+    Predict credit score for new data.
+    input_data: dict with keys matching features (credit_history as string)
+    """
+    df_input = pd.DataFrame([input_data])
+    df_input['credit_history_encoded'] = le_history.transform(df_input['credit_history'])
+    df_input = df_input.drop('credit_history', axis=1)
+    df_input_scaled = scaler.transform(df_input)
+    pred = model.predict(df_input_scaled)[0]
+    prob = model.predict_proba(df_input_scaled)[0]
+    return le_target.inverse_transform([pred])[0], dict(zip(le_target.classes_, prob))
+
+# Example prediction
+example = {
+    'age': 30, 'income': 60000, 'debt_to_income': 0.25, 'credit_utilization': 0.2,
+    'years_credit': 8, 'num_credit_lines': 2, 'credit_history': 'good',
+    'employment_years': 5, 'loan_amount': 20000
+}
+score, probs = predict_credit_score(best_model, scaler, le_target, le_history, example)
+print(f"\nExample prediction: {example['credit_history']} history applicant -> {score}")
+print("Probabilities:", {k: f"{v:.3f}" for k, v in probs.items()})
+
+print("\nPipeline complete! Check plots and metrics above.")import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+from xgboost import XGBClassifier
+import warnings
+warnings.filterwarnings('ignore')
+
+# Step 1: Generate synthetic credit dataset
+np.random.seed(42)
+n_samples = 1000
+
+data = {
+    'age': np.random.normal(35, 10, n_samples).clip(18, 75).astype(int),
+    'income': np.random.lognormal(10, 0.5, n_samples).clip(10000, 200000).astype(int),
+    'debt_to_income': np.random.beta(2, 5, n_samples) * 0.8,
+    'credit_utilization': np.random.beta(3, 3, n_samples) * 1.0,
+    'years_credit': np.random.exponential(5, n_samples).clip(0, 40),
+    'num_credit_lines': np.random.poisson(3, n_samples).clip(0, 15),
+    'credit_history': np.random.choice(['good', 'fair', 'poor'], n_samples, p=[0.5, 0.3, 0.2]),
+    'employment_years': np.random.exponential(7, n_samples).clip(0, 50),
+    'loan_amount': np.random.lognormal(11, 0.4, n_samples).clip(5000, 100000).astype(int)
+}
+
+df = pd.DataFrame(data)
+
+# Define credit score based on features (simplified rule-based for synthetic)
+def calculate_credit_score(row):
+    score = 0
+    if row['age'] > 25: score += 10
+    if row['income'] > 50000: score += 20
+    if row['debt_to_income'] < 0.3: score += 25
+    if row['credit_utilization'] < 0.3: score += 25
+    if row['years_credit'] > 5: score += 15
+    if row['num_credit_lines'] < 5: score += 10
+    if row['credit_history'] == 'good': score += 30
+    elif row['credit_history'] == 'fair': score += 10
+    if row['employment_years'] > 2: score += 15
+    if row['loan_amount'] < 50000: score += 10
+    if score >= 120: return 'high'
+    elif score >= 80: return 'medium'
+    else: return 'low'
+
+df['credit_score'] = df.apply(calculate_credit_score, axis=1)
+
+print("Dataset generated. Shape:", df.shape)
+print("\nTarget distribution:")
+print(df['credit_score'].value_counts())
+
+# Step 2: EDA
+plt.figure(figsize=(15, 10))
+
+plt.subplot(2, 3, 1)
+df['credit_score'].value_counts().plot(kind='bar')
+plt.title('Credit Score Distribution')
+
+plt.subplot(2, 3, 2)
+sns.histplot(df['age'], kde=True)
+plt.title('Age Distribution')
+
+plt.subplot(2, 3, 3)
+sns.histplot(df['income']/1000, kde=True)
+plt.title('Income (thousands)')
+
+plt.subplot(2, 3, 4)
+sns.boxplot(x='credit_score', y='debt_to_income', data=df)
+plt.title('Debt to Income by Score')
+
+plt.subplot(2, 3, 5)
+sns.boxplot(x='credit_score', y='credit_utilization', data=df)
+plt.title('Credit Utilization by Score')
+
+plt.subplot(2, 3, 6)
+sns.countplot(x='credit_history', hue='credit_score', data=df)
+plt.title('Credit History vs Score')
+
+plt.tight_layout()
+plt.show()
+
+# Correlation heatmap (numeric features)
+numeric_df = df.select_dtypes(include=[np.number])
+plt.figure(figsize=(10, 8))
+sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', center=0)
+plt.title('Correlation Heatmap')
+plt.show()
+
+# Step 3: Preprocessing
+# Encode categorical
+le_history = LabelEncoder()
+df['credit_history_encoded'] = le_history.fit_transform(df['credit_history'])
+
+# Features and target
+X = df.drop(['credit_score', 'credit_history'], axis=1)
+y = df['credit_score']
+
+le_target = LabelEncoder()
+y_encoded = le_target.fit_transform(y)
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
+
+# Scale features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print("\nTrain set shape:", X_train_scaled.shape)
+print("Test set shape:", X_test_scaled.shape)
+
+# Step 4: Train models
+models = {
+    'Logistic Regression': LogisticRegression(random_state=42, max_iter=1000),
+    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+    'XGBoost': XGBClassifier(random_state=42, eval_metric='mlogloss')
+}
+
+results = {}
+for name, model in models.items():
+    # Train
+    model.fit(X_train_scaled, y_train)
+    
+    # Predict
+    y_pred = model.predict(X_test_scaled)
+    
+    # Evaluate
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, model.predict_proba(X_test_scaled), multi_class='ovr')
+results[name] = {'accuracy': acc, 'roc_auc': auc}
+    
+print(f"\n{name}:")
+print(f"Accuracy: {acc:.4f}")
+print(f"ROC-AUC: {auc:.4f}")
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=le_target.classes_))
+
+# Best model
+best_model_name = max(results, key=lambda k: results[k]['accuracy'])
+best_model = models[best_model_name]
+print(f"\nBest model: {best_model_name} (Accuracy: {results[best_model_name]['accuracy']:.4f})")
+
+# Confusion Matrix for best model
+y_pred_best = best_model.predict(X_test_scaled)
+cm = confusion_matrix(y_test, y_pred_best)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=le_target.classes_, yticklabels=le_target.classes_)
+plt.title(f'Confusion Matrix - {best_model_name}')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.show()
+
+# Step 5: Prediction function
+def predict_credit_score(model, scaler, le_target, le_history, input_data):
+    """
+    Predict credit score for new data.
+    input_data: dict with keys matching features (credit_history as string)
+    """
+    df_input = pd.DataFrame([input_data])
+    df_input['credit_history_encoded'] = le_history.transform(df_input['credit_history'])
+    df_input = df_input.drop('credit_history', axis=1)
+    df_input_scaled = scaler.transform(df_input)
+    pred = model.predict(df_input_scaled)[0]
+    prob = model.predict_proba(df_input_scaled)[0]
+    return le_target.inverse_transform([pred])[0], dict(zip(le_target.classes_, prob))
+
+# Example prediction
+example = {
+    'age': 30, 'income': 60000, 'debt_to_income': 0.25, 'credit_utilization': 0.2,
+    'years_credit': 8, 'num_credit_lines': 2, 'credit_history': 'good',
+    'employment_years': 5, 'loan_amount': 20000
+}
+score, probs = predict_credit_score(best_model, scaler, le_target, le_history, example)
+print(f"\nExample prediction: {example['credit_history']} history applicant -> {score}")
+print("Probabilities:", {k: f"{v:.3f}" for k, v in probs.items()})
+
+print("\nPipeline complete! Check plots and metrics above.")
