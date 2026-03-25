@@ -1,0 +1,10 @@
+# # TODO: Credit Score Classification ML Pipeline
+
+## Plan Steps:
+
+- [x] Step 1: Install required dependencies (pandas, numpy, scikit-learn, xgboost, matplotlib, seaborn).
+- [x] Step 2: Implement data generation/EDA in project.py.
+- [x] Step 3: Add preprocessing and train-test split.
+- [x] Step 4: Train and evaluate models (Logistic Regression, Random Forest, XGBoost).
+- [x] Step 5: Add model selection, predictions, and visualizations.
+- [x] Step 6: Test execution and verify results.-
